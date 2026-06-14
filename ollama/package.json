@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "dependencies": {
+    "@langchain/ollama": "^1.2.7",
+    "dotenv": "^17.4.2"
+  }
+}
