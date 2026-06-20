@@ -5,6 +5,8 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 
 load_dotenv()
 
@@ -23,6 +25,7 @@ def main():
         print("Invalid YouTube URL or Video ID.")
         return
 
+    # Fetch and prepare transcript document
     try:
         transcript_list = YouTubeTranscriptApi().fetch(video_id)
         transcript = " ".join(chunk.text for chunk in transcript_list)
@@ -30,18 +33,29 @@ def main():
         print(f"Failed to fetch transcript: {exc}")
         return
 
-    llm = ChatOllama(model="gpt-oss:120b-cloud")
-    embeddings = OllamaEmbeddings(model="nomic-embed-text:v1.5")
-
+    # Split text and build FAISS retriever
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     chunks = splitter.create_documents([transcript])
+    embeddings = OllamaEmbeddings(model="nomic-embed-text:v1.5")
     vector_store = FAISS.from_documents(chunks, embeddings)
     retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 4})
 
+    # Define LCEL RAG components
     qa_prompt = PromptTemplate.from_template(
         "Answer the question using the context below.\n\nContext:\n{context}\n\nQuestion: {question}\nAnswer:"
     )
+    llm = ChatOllama(model="gpt-oss:120b-cloud")
 
+    def format_docs(docs):
+        return "\n\n".join(doc.page_content for doc in docs)
+
+    # Clean, short LangChain Expression Language (LCEL) chain
+    rag_chain = (
+        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        | qa_prompt | llm | StrOutputParser()
+    )
+
+    # Interactive Q&A loop
     while True:
         try:
             question = input("\nAsk a question (or type 'exit' to quit): ").strip()
@@ -49,12 +63,9 @@ def main():
                 continue
             if question.lower() in ["exit", "quit"]:
                 break
-                
-            retrieved_docs = retriever.invoke(question)
-            context_text = "\n\n".join(doc.page_content for doc in retrieved_docs)
-            formatted_prompt = qa_prompt.invoke({"context": context_text, "question": question})
-            answer = llm.invoke(formatted_prompt)
-            print(f"\n{answer.content}\n")
+            
+            answer = rag_chain.invoke(question)
+            print(f"\n{answer}\n")
         except (KeyboardInterrupt, SystemExit):
             break
 
